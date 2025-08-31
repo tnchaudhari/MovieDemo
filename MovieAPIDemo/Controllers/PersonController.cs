@@ -1,4 +1,6 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using AutoMapper;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using MovieAPIDemo.Data;
 using MovieAPIDemo.Entities;
 using MovieAPIDemo.Models;
@@ -10,10 +12,12 @@ namespace MovieAPIDemo.Controllers
     public class PersonController : ControllerBase
     {
         private readonly MovieDbContext _context;
+        private readonly IMapper _mapper;
 
-        public PersonController(MovieDbContext context)
+        public PersonController(MovieDbContext context, IMapper mapper)
         {
             _context = context;
+            _mapper = mapper;
         }
 
         [HttpGet]
@@ -23,13 +27,7 @@ namespace MovieAPIDemo.Controllers
             try
             {
                 var actorCount = _context.Person.Count();
-                var actorListViewModel = _context.Person.Skip(pageIndex * pageSize).Take(pageSize).
-                    Select(x => new ActorViewModel
-                    {
-                        Id = x.Id,
-                        Name = x.Name,
-                        DateOfBirth = x.DateOfBirth,
-                    }).ToList();
+                var actorListViewModel = _mapper.Map<List<ActorViewModel>>(_context.Person.Skip(pageIndex * pageSize).Take(pageSize).ToList());
 
                 response.Status = true;
                 response.Message = "Success";
@@ -58,26 +56,26 @@ namespace MovieAPIDemo.Controllers
 
             try
             {
-                var actorViewModel = _context.Person.Where(x => x.Id == id).FirstOrDefault();
+                var actorData = _context.Person.Where(x => x.Id == id).FirstOrDefault();
 
-                if (actorViewModel == null)
+                if (actorData == null)
                 {
                     response.Status = false;
                     response.Message = "Record Does Not Exist.";
                     return BadRequest(response);
                 }
 
-                var actorData = new ActorDetailsViewModel
+                var actorViewModel = new ActorDetailsViewModel
                 {
-                    Id = actorViewModel.Id,
-                    Name = actorViewModel.Name,
-                    DateOfBirth = actorViewModel.DateOfBirth,
-                    Movies = _context.Movie.Where(x => x.Actors.Contains(actorViewModel)).Select(y => y.Title).ToArray(),
+                    Id = actorData.Id,
+                    Name = actorData.Name,
+                    DateOfBirth = actorData.DateOfBirth,
+                    Movies = _context.Movie.Where(x => x.Actors.Contains(actorData)).Select(y => y.Title).ToArray(),
                 };
 
                 response.Status = true;
                 response.Message = "Success";
-                response.Data = actorData;
+                response.Data = actorViewModel;
 
                 return Ok(response);
             }
@@ -89,6 +87,36 @@ namespace MovieAPIDemo.Controllers
                 return BadRequest(response);
             }
         }
+
+
+        [HttpGet("Search/{searchText}")]
+        public IActionResult Get(string searchText)
+        {
+            BaseResponseModel response = new();
+            try
+            {
+                var searchedPerson = _context.Person.Where(x => x.Name.Contains(searchText)).Select(y => new
+                {
+                    y.Id,
+                    y.Name,
+                }).ToList();
+
+
+                response.Status = true;
+                response.Message = "Success";
+                response.Data = searchedPerson;
+
+                return Ok(response);
+            }
+            catch (Exception)
+            {
+                response.Status = false;
+                response.Message = "Something went wrong";
+
+                return BadRequest(response);
+            }
+        }
+
 
         [HttpPost]
         public IActionResult Post(ActorViewModel model)
@@ -146,7 +174,7 @@ namespace MovieAPIDemo.Controllers
                         return BadRequest(response);
                     };
 
-                    var actorDetails = _context.Person.Where(y => y.Id == model.Id).FirstOrDefault();
+                    var actorDetails = _context.Person.Where(y => y.Id == model.Id).AsNoTracking().FirstOrDefault();
 
                     if (actorDetails == null)
                     {
@@ -155,17 +183,15 @@ namespace MovieAPIDemo.Controllers
                         return BadRequest(response);
                     }
 
-                    actorDetails.Name = model.Name;
-                    actorDetails.DateOfBirth = model.DateOfBirth;
-                    actorDetails.ModifiedDate = DateTime.UtcNow;
+                    var actorData = _mapper.Map<Person>(model);
+                    actorData.ModifiedDate = DateTime.UtcNow;
 
-
-                    _context.Person.Update(actorDetails);
+                    _context.Person.Update(actorData);
                     _context.SaveChanges();
 
                     response.Status = true;
                     response.Message = "Updated Successfully.";
-                    response.Data = actorDetails;
+                    response.Data = actorData;
 
                     return Ok(response);
                 }
@@ -174,6 +200,39 @@ namespace MovieAPIDemo.Controllers
                 response.Data = ModelState;
 
                 return BadRequest(response);
+            }
+            catch (Exception)
+            {
+                response.Status = false;
+                response.Message = "Something went wrong.";
+                return BadRequest(response);
+            }
+        }
+
+        [HttpDelete]
+        public IActionResult Delete(int id)
+        {
+            BaseResponseModel response = new BaseResponseModel();
+
+            try
+            {
+                var person = _context.Person.Where(x => x.Id == id).FirstOrDefault();
+
+                if (person == null)
+                {
+                    response.Status = false;
+                    response.Message = "Invalid Person Record.";
+                    return BadRequest(response);
+                }
+
+                _context.Person.Remove(person);
+                _context.SaveChanges();
+
+                response.Status = true;
+                response.Message = "Deleted Successfully.";
+                response.Data = person;
+
+                return Ok(response);
             }
             catch (Exception)
             {

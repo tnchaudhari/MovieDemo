@@ -1,4 +1,6 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using System.Net.Http.Headers;
+using AutoMapper;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MovieAPIDemo.Data;
 using MovieAPIDemo.Entities;
@@ -11,10 +13,12 @@ namespace MovieAPIDemo.Controllers
     public class MovieController : ControllerBase
     {
         private readonly MovieDbContext _context;
+        private readonly IMapper _mapper;
 
-        public MovieController(MovieDbContext context)
+        public MovieController(MovieDbContext context, IMapper mapper)
         {
             _context = context;
+            _mapper = mapper;
         }
 
         [HttpGet]
@@ -24,21 +28,7 @@ namespace MovieAPIDemo.Controllers
             try
             {
                 var movieCount = _context.Movie.Count();
-                var movieListViewModel = _context.Movie.Include(x => x.Actors).Skip(pageIndex * pageSize).Take(pageSize).
-                    Select(x => new MovieListViewModel
-                    {
-                        Id = x.Id,
-                        Title = x.Title,
-                        Language = x.Language,
-                        CoverImage = x.CoverImage,
-                        ReleaseDate = x.ReleaseDate,
-                        Actors = x.Actors.Select(y => new ActorViewModel
-                        {
-                            Id = y.Id,
-                            Name = y.Name,
-                            DateOfBirth = y.DateOfBirth,
-                        }).ToList(),
-                    }).ToList();
+                var movieListViewModel = _mapper.Map<List<MovieListViewModel>>(_context.Movie.Include(x => x.Actors).Skip(pageIndex * pageSize).Take(pageSize).ToList());
 
                 response.Status = true;
                 response.Message = "Success";
@@ -66,33 +56,20 @@ namespace MovieAPIDemo.Controllers
 
             try
             {
-                var movieDetailsViewModel = _context.Movie.Include(x => x.Actors).Where(x => x.Id == id).
-                    Select(x => new MovieDetailsViewModel
-                    {
-                        Id = x.Id,
-                        Title = x.Title,
-                        Language = x.Language,
-                        CoverImage = x.CoverImage,
-                        ReleaseDate = x.ReleaseDate,
-                        Description = x.Description,
-                        Actors = x.Actors.Select(y => new ActorViewModel
-                        {
-                            Id = y.Id,
-                            Name = y.Name,
-                            DateOfBirth = y.DateOfBirth,
-                        }).ToList(),
-                    }).FirstOrDefault();
+                var movie = _context.Movie.Include(x => x.Actors).Where(x => x.Id == id).FirstOrDefault();
 
-                if (movieDetailsViewModel == null)
+                if (movie == null)
                 {
                     response.Status = false;
                     response.Message = "Record Does Not Exist.";
                     return BadRequest(response);
                 }
 
+                var movieData = _mapper.Map<MovieDetailsViewModel>(movie);
+
                 response.Status = true;
                 response.Message = "Success";
-                response.Data = movieDetailsViewModel;
+                response.Data = movieData;
 
                 return Ok(response);
             }
@@ -124,34 +101,14 @@ namespace MovieAPIDemo.Controllers
                         return BadRequest(response);
                     }
 
-                    var newMovie = new Movie()
-                    {
-                        Title = model.Title,
-                        CoverImage = model.CoverImage ?? "",
-                        Language = model.Language,
-                        Description = model.Description ?? "",
-                        ReleaseDate = model.ReleaseDate,
-                        Actors = actors,
-                    };
+                    var newMovie = _mapper.Map<Movie>(model);
+
+                    newMovie.Actors = actors;
 
                     _context.Movie.Add(newMovie);
                     _context.SaveChanges();
 
-                    var responseData = new MovieDetailsViewModel
-                    {
-                        Id = newMovie.Id,
-                        Title = newMovie.Title,
-                        Language = newMovie.Language,
-                        CoverImage = newMovie.CoverImage,
-                        ReleaseDate = newMovie.ReleaseDate,
-                        Description = newMovie.Description,
-                        Actors = newMovie.Actors.Select(y => new ActorViewModel
-                        {
-                            Id = y.Id,
-                            Name = y.Name,
-                            DateOfBirth = y.DateOfBirth,
-                        }).ToList(),
-                    };
+                    var responseData = _mapper.Map<MovieDetailsViewModel>(newMovie);
 
                     response.Status = true;
                     response.Message = "Created Successfully.";
@@ -185,7 +142,7 @@ namespace MovieAPIDemo.Controllers
                     if (model.Id <= 0)
                     {
                         response.Status = false;
-                        response.Message = "Invalid movie record.";
+                        response.Message = "Invalid Movie Record.";
                         return BadRequest(response);
                     }
 
@@ -218,21 +175,7 @@ namespace MovieAPIDemo.Controllers
                     _context.Movie.Update(movieDetails);
                     _context.SaveChanges();
 
-                    var responseData = new MovieDetailsViewModel
-                    {
-                        Id = movieDetails.Id,
-                        Title = movieDetails.Title,
-                        Language = movieDetails.Language,
-                        CoverImage = movieDetails.CoverImage,
-                        ReleaseDate = movieDetails.ReleaseDate,
-                        Description = movieDetails.Description,
-                        Actors = movieDetails.Actors.Select(y => new ActorViewModel
-                        {
-                            Id = y.Id,
-                            Name = y.Name,
-                            DateOfBirth = y.DateOfBirth,
-                        }).ToList(),
-                    };
+                    var responseData = _mapper.Map<MovieDetailsViewModel>(movieDetails);
 
                     response.Status = true;
                     response.Message = "Updated Successfully.";
@@ -251,6 +194,84 @@ namespace MovieAPIDemo.Controllers
                 response.Status = false;
                 response.Message = "Something went wrong.";
                 return BadRequest(response);
+            }
+        }
+
+
+        [HttpDelete]
+        public IActionResult Delete(int id)
+        {
+            BaseResponseModel response = new BaseResponseModel();
+
+            try
+            {
+                var movie = _context.Movie.Where(x => x.Id == id).FirstOrDefault();
+
+                if(movie == null)
+                {
+                    response.Status = false;
+                    response.Message = "Invalid Movie Record.";
+                    return BadRequest(response);
+                }
+
+                _context.Movie.Remove(movie);
+                _context.SaveChanges();
+
+                response.Status = true;
+                response.Message = "Deleted Successfully.";
+                response.Data = movie;
+
+                return Ok(response);
+            }
+            catch (Exception)
+            {
+                response.Status = false;
+                response.Message = "Something went wrong.";
+                return BadRequest(response);
+            }
+        }
+
+        [HttpPost("upload-movie-poster")]
+        public async Task<IActionResult> UploadMoviePoster(IFormFile image)
+        {
+            try
+            {
+                var fileName = ContentDispositionHeaderValue.Parse(image.ContentDisposition).FileName.TrimStart('\"').TrimEnd('\"');
+                string newPath = @"N:\to-delete";
+
+                if (!Directory.Exists(newPath))
+                {
+                    Directory.CreateDirectory(newPath);
+                }
+
+                string[] allowedImageExtensions = [".jpg", ".jpeg", ".png"];
+
+                if (!allowedImageExtensions.Contains(Path.GetExtension(fileName)))
+                {
+                    return BadRequest(new BaseResponseModel
+                    {
+                        Status = false,
+                        Message = "Only .jpg, .jpeg, .png files are only allowed"
+                    });
+                }
+
+                string newFileName = Guid.NewGuid() + Path.GetExtension(fileName);
+                string fullFilePath = Path.Combine(newPath, newFileName);
+
+                using (var stream = new FileStream(fullFilePath, FileMode.Create))
+                {
+                    await image.CopyToAsync(stream);
+                }
+
+                return Ok(new { ProfileImage = $"{HttpContext.Request.Scheme}://{HttpContext.Request.Host}/StaticFiles/{newFileName}" });
+            }
+            catch (Exception)
+            {
+                return BadRequest(new BaseResponseModel
+                {
+                    Status = false,
+                    Message = "Error Occurred."
+                });
             }
         }
     }
